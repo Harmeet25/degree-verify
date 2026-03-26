@@ -3,7 +3,7 @@
 // paste your contract address below.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const CONTRACT_ADDRESS = "0xDB281b47Cd312ff163B44bdE3988F95c3c7CdeB3";
+export const CONTRACT_ADDRESS = "0x72eB4fDf85007eE60e4bB7BfF2DB6DdDeB80bA73";
 
 export const CONTRACT_ABI = [
   {
