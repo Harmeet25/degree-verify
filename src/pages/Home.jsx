@@ -3,26 +3,19 @@ import { ethers } from "ethers";
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from "../contract";
 
 export default function Home({ setPage, wallet, setWallet, setContract }) {
-  const [totalCerts, setTotalCerts] = useState("—");
+  const [totalCerts, setTotalCerts]     = useState("—");
   const [verifications, setVerifications] = useState("—");
 
-  // Fetch stats as soon as the page loads
   useEffect(() => {
     async function loadStats() {
-      // 1. Generate a realistic dynamic number for daily verifications
       setVerifications(Math.floor(Math.random() * 45) + 12);
-
-      // 2. Fetch the actual total certificates issued from the blockchain
       if (window.ethereum) {
         try {
           const provider = new ethers.BrowserProvider(window.ethereum);
-          // We use the provider directly for read-only access so it works even before they click connect!
           const ct = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
           const total = await ct.totalCertificates();
           setTotalCerts(total.toString());
-        } catch (err) {
-          console.log("Could not load blockchain stats yet.");
-        }
+        } catch { /* not connected yet */ }
       }
     }
     loadStats();
@@ -36,12 +29,12 @@ export default function Home({ setPage, wallet, setWallet, setContract }) {
     try {
       const provider = new ethers.BrowserProvider(window.ethereum);
       await provider.send("eth_requestAccounts", []);
-      const signer = await provider.getSigner();
+      const signer  = await provider.getSigner();
       const address = await signer.getAddress();
       setWallet(address);
       const ct = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       setContract(ct);
-      setPage("registry");
+      setPage("admin");
     } catch (err) {
       console.error(err);
       alert("Connection failed: " + err.message);
@@ -66,7 +59,7 @@ export default function Home({ setPage, wallet, setWallet, setContract }) {
       </div>
 
       <div className="home-body">
-        {/* Left: connect card */}
+        {/* Left: connect + panels */}
         <div>
           <div className="connect-card">
             <div className="connect-card-title">
@@ -74,18 +67,18 @@ export default function Home({ setPage, wallet, setWallet, setContract }) {
             </div>
             <div className="connect-card-sub">
               {wallet
-                ? `You are authenticated as ${wallet.slice(0,12)}...${wallet.slice(-6)}. You may now issue, verify, and browse certificates on-chain.`
-                : "Connect MetaMask to issue certificates as an authorised institution or to verify any credential against the blockchain registry."
+                ? `Authenticated as ${wallet.slice(0,12)}...${wallet.slice(-6)}. Access the Admin Panel to issue certificates via Excel upload.`
+                : "Connect MetaMask to access the Admin Panel. Students and Employers can use their panels without a wallet."
               }
             </div>
 
             {wallet ? (
-              <div style={{display:"flex",gap:"1rem",flexWrap:"wrap"}}>
-                <button className="btn-gold" onClick={() => setPage("issue")}>
-                  📜 Issue Certificate
+              <div style={{ display:"flex", gap:"1rem", flexWrap:"wrap" }}>
+                <button className="btn-gold" onClick={() => setPage("admin")}>
+                  ⚙️ Admin Panel
                 </button>
-                <button className="btn-secondary" onClick={() => setPage("verify")}>
-                  🔍 Verify a Degree
+                <button className="btn-secondary" onClick={() => setPage("employer")}>
+                  🔍 Employer Verify
                 </button>
               </div>
             ) : (
@@ -94,14 +87,20 @@ export default function Home({ setPage, wallet, setWallet, setContract }) {
               </button>
             )}
 
+            {/* Panel cards */}
             <div className="feature-list">
               {[
-                ["🔒","Immutable Records","Every certificate is permanently hashed and stored on Sepolia testnet."],
-                ["⚡","Instant Verification","Verify any credential in seconds using wallet address or certificate ID."],
-                ["🌐","Globally Accessible","Any institution or employer can verify credentials without intermediaries."],
-                ["🎓","Multi-Degree Support","Issue Bachelor, Master, PhD, Diploma and Honours degrees."],
-              ].map(([icon,title,desc]) => (
-                <div className="feature-item" key={title}>
+                ["⚙️", "Admin Panel",    "Upload Excel with student data → auto-generate & batch-issue certificates on blockchain.", "admin"],
+                ["🎓", "Student Panel",  "Enter your enrolment number → fetch your blockchain certificate & download as PDF.",       "student"],
+                ["🔍", "Employer Verify","Browse all issued certificates, click any record to run a blockchain authenticity check.", "employer"],
+                ["🔒", "Immutable Proof","Every certificate is cryptographically hashed and permanently stored on Ethereum Sepolia.","home"],
+              ].map(([icon, title, desc, target]) => (
+                <div
+                  className="feature-item"
+                  key={title}
+                  style={{ cursor: target !== "home" ? "pointer" : "default" }}
+                  onClick={() => target !== "home" && setPage(target)}
+                >
                   <span className="feature-icon">{icon}</span>
                   <div>
                     <div className="feature-title">{title}</div>
@@ -116,43 +115,37 @@ export default function Home({ setPage, wallet, setWallet, setContract }) {
         {/* Right: stats */}
         <div className="home-stats">
           <div>
-            <div style={{fontFamily:"var(--f-label)",fontSize:"0.65rem",letterSpacing:"3px",textTransform:"uppercase",color:"var(--ink-light)",marginBottom:"1.25rem",fontWeight:700}}>
+            <div style={{ fontFamily:"var(--f-label)", fontSize:"0.65rem", letterSpacing:"3px", textTransform:"uppercase", color:"var(--ink-light)", marginBottom:"1.25rem", fontWeight:700 }}>
               System Statistics
             </div>
           </div>
           <div className="stat-row">
-            <div>
-              <div className="stat-row-label">Certificates Issued</div>
-            </div>
+            <div><div className="stat-row-label">Certificates Issued</div></div>
             <div className="stat-row-value">{totalCerts}</div>
           </div>
           <div className="stat-row">
-            <div>
-              <div className="stat-row-label">Verifications Today</div>
-            </div>
+            <div><div className="stat-row-label">Verifications Today</div></div>
             <div className="stat-row-value">{verifications}</div>
           </div>
           <div className="stat-row">
-            <div>
-              <div className="stat-row-label">Network</div>
-            </div>
-            <div className="stat-row-value" style={{fontSize:"1.1rem",color:"var(--indigo)"}}>Sepolia</div>
+            <div><div className="stat-row-label">Network</div></div>
+            <div className="stat-row-value" style={{ fontSize:"1.1rem", color:"var(--indigo)" }}>Sepolia</div>
           </div>
 
-          {/* decorative chain diagram */}
           <div style={{
-            marginTop:"1.5rem",padding:"1.5rem",
-            background:"white",border:"1px solid var(--rule)",
-            fontFamily:"var(--f-mono)",fontSize:"0.7rem",color:"var(--ink-light)",
-            lineHeight:"2"
+            marginTop:"1.5rem", padding:"1.5rem",
+            background:"white", border:"1px solid var(--rule)",
+            fontFamily:"var(--f-mono)", fontSize:"0.7rem", color:"var(--ink-light)", lineHeight:2
           }}>
-            <div style={{color:"var(--navy)",fontWeight:500,marginBottom:"0.5rem",fontSize:"0.65rem",letterSpacing:"2px",textTransform:"uppercase",fontFamily:"var(--f-label)"}}>How it works</div>
-            <div>① Institution issues certificate</div>
-            <div style={{paddingLeft:"1rem",color:"var(--gold)"}}>↓ hashed + signed</div>
-            <div>② Stored on Ethereum blockchain</div>
-            <div style={{paddingLeft:"1rem",color:"var(--gold)"}}>↓ immutable record</div>
-            <div>③ Anyone can verify instantly</div>
-            <div style={{paddingLeft:"1rem",color:"var(--sage)"}}>✓ cryptographically proven</div>
+            <div style={{ color:"var(--navy)", fontWeight:500, marginBottom:"0.5rem", fontSize:"0.65rem", letterSpacing:"2px", textTransform:"uppercase", fontFamily:"var(--f-label)" }}>How it works</div>
+            <div>① Admin uploads Excel</div>
+            <div style={{ paddingLeft:"1rem", color:"var(--gold)" }}>↓ parsed + hashed</div>
+            <div>② Batch-issued on blockchain</div>
+            <div style={{ paddingLeft:"1rem", color:"var(--gold)" }}>↓ immutable record</div>
+            <div>③ Student downloads PDF</div>
+            <div style={{ paddingLeft:"1rem", color:"var(--gold)" }}>↓ enrolment lookup</div>
+            <div>④ Employer verifies hash</div>
+            <div style={{ paddingLeft:"1rem", color:"var(--sage)" }}>✓ cryptographically proven</div>
           </div>
         </div>
       </div>

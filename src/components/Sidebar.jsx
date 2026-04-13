@@ -1,8 +1,8 @@
 const NAV = [
-  { id: "home",     icon: "🏛", label: "Portal Home" },
-  { id: "issue",    icon: "📜", label: "Issue Certificate" },
-  { id: "verify",   icon: "🔍", label: "Verify Degree" },
-  { id: "registry", icon: "📚", label: "Registry Ledger" },
+  { id: "home",     icon: "🏛",  label: "Portal Home"    },
+  { id: "admin",    icon: "⚙️",  label: "Admin Panel"    },
+  { id: "student",  icon: "🎓",  label: "Student Panel"  },
+  { id: "employer", icon: "🔍",  label: "Employer Verify" },
 ];
 
 export default function Sidebar({ page, setPage, wallet }) {
