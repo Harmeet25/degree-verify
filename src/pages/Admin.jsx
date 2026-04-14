@@ -35,7 +35,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
         const data = XLSX.utils.sheet_to_json(ws, { defval:"" });
         if (!data.length) { setError("Excel file is empty."); return; }
 
-        const normalised = data.map((row, idx) => {
+       const normalised = data.map((row, idx) => {
           const r = {};
           Object.keys(row).forEach(k => {
             r[k.trim().toLowerCase().replace(/\s+/g,"_")] = String(row[k]).trim();
@@ -47,7 +47,9 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
             fieldOfStudy   : r["field"]             || r["field_of_study"]  || r["branch"]  || "Computer Science",
             year           : r["year"]              || new Date().getFullYear().toString(),
             grade          : r["grade"]             || r["cgpa"]            || "",
-            studentWallet  : r["wallet_address"]    || r["wallet"]          || ZERO_ADDR,
+            
+            // 🚨 FIX: Change ZERO_ADDR to wallet here
+            studentWallet  : r["wallet_address"]    || r["wallet"]          || wallet, 
           };
         }).filter(r => r.studentName);
 
