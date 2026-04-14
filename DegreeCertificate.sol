@@ -2,114 +2,55 @@
 pragma solidity ^0.8.19;
 
 // ═══════════════════════════════════════════════════════════
-//  DegreeCertificate.sol  v2.0 (FIXED)
-//  Deploy on: Remix IDE → Sepolia Testnet
-//  Compiler:  0.8.19 (Enable optimization: 200)
+//  DegreeCertificate.sol  v5 — FINAL (Stack Fixed)
 // ═══════════════════════════════════════════════════════════
 
 contract DegreeCertificate {
 
-    // ── Structs ──────────────────────────────────────────────
     struct Certificate {
         address issuer;
-        address student;
-        string  enrolmentNumber;   
+        address student;        // admin wallet used if student has none
+        string  enrolmentNumber;
         string  studentName;
         string  degree;
         string  fieldOfStudy;
         string  university;
         uint256 year;
-        string  certHash;          // Kept as string to match frontend '0x...' format
-        string  certId;            
+        string  certHash;       // keccak256 hex string from frontend
+        string  certId;         // human-readable ID
         uint256 timestamp;
         bool    isValid;
     }
 
-    // ── Storage ──────────────────────────────────────────────
-    Certificate[]                           private allCerts;
-    mapping(address  => uint256[])          private studentCertIndexes;
-    mapping(string   => uint256)            private hashToIndex;        
-    mapping(string   => uint256)            private enrolToIndex;       
-    mapping(address  => bool)               public  authorisedIssuers;
-    address                                 public  owner;
-    uint256                                 public  totalCertificates;
+    Certificate[]                            private allCerts;
+    mapping(string  => uint256)              private hashToIndex;    // certHash  → slot+1
+    mapping(string  => uint256)              private enrolToIndex;   // enrolment → slot+1
+    mapping(address => uint256[])            private studentIndexes;
+    mapping(address => bool)                 public  authorisedIssuers;
+    address                                  public  owner;
+    uint256                                  public  totalCertificates;
 
-    // ── Events ───────────────────────────────────────────────
-    event CertificateIssued(
-        address indexed issuer,
-        address indexed student,
-        string  enrolmentNumber,
-        string  studentName,
-        string  degree,
-        string  university,
-        uint256 year,
-        string  certHash,
-        string  certId,
-        uint256 timestamp
-    );
-    event IssuerAuthorised(address indexed issuer);
-    event IssuerRevoked(address indexed issuer);
+    event CertificateIssued(string certHash, string enrolmentNumber, string studentName);
+    event IssuerAuthorised(address issuer);
 
-    // ── Modifiers ────────────────────────────────────────────
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not contract owner");
-        _;
-    }
-
+    modifier onlyOwner()      { require(msg.sender == owner, "Not owner"); _; }
     modifier onlyAuthorised() {
-        require(
-            msg.sender == owner || authorisedIssuers[msg.sender],
-            "Not an authorised issuer"
-        );
+        require(msg.sender == owner || authorisedIssuers[msg.sender], "Not authorised");
         _;
     }
 
-    // ── Constructor ──────────────────────────────────────────
     constructor() {
         owner = msg.sender;
         authorisedIssuers[msg.sender] = true;
     }
 
-    // ── Admin functions ──────────────────────────────────────
     function authoriseIssuer(address _issuer) external onlyOwner {
         authorisedIssuers[_issuer] = true;
         emit IssuerAuthorised(_issuer);
     }
 
-    function revokeIssuer(address _issuer) external onlyOwner {
-        authorisedIssuers[_issuer] = false;
-        emit IssuerRevoked(_issuer);
-    }
-
-    // ── Core: single issue ───────────────────────────────────
-    function issueCertificate(
-        address _student,
-        string  memory _enrolmentNumber,
-        string  memory _studentName,
-        string  memory _degree,
-        string  memory _fieldOfStudy,
-        string  memory _university,
-        uint256        _year,
-        string  memory _certHash,
-        string  memory _certId
-    ) external onlyAuthorised {
-        require(_student != address(0),              "Invalid student address");
-        require(bytes(_studentName).length > 0,      "Student name required");
-        require(bytes(_enrolmentNumber).length > 0,  "Enrolment number required");
-        require(bytes(_degree).length > 0,           "Degree required");
-        require(bytes(_certHash).length > 0,         "Certificate hash required");
-        require(hashToIndex[_certHash] == 0,         "Hash already exists");
-        require(enrolToIndex[_enrolmentNumber] == 0, "Enrolment already issued");
-        require(_year >= 1900 && _year <= 2100,      "Invalid year");
-
-        _storeCert(
-            _student, _enrolmentNumber, _studentName,
-            _degree, _fieldOfStudy, _university,
-            _year, _certHash, _certId
-        );
-    }
-
-    // ── Core: batch issue (Excel upload) ─────────────────────
+    // ── Batch issue (Admin Excel upload) ─────────────────────
+    // Reverted arrays back to 'memory' to fix the EVM Stack Too Deep error
     function batchIssueCertificates(
         address[] memory _students,
         string[]  memory _enrolments,
@@ -121,102 +62,104 @@ contract DegreeCertificate {
         string[]  memory _certHashes,
         string[]  memory _certIds
     ) external onlyAuthorised {
+        uint256 len = _students.length;
         require(
-            _students.length == _enrolments.length &&
-            _enrolments.length == _names.length &&
-            _names.length == _degrees.length &&
-            _degrees.length == _certHashes.length,
+            _enrolments.length   == len &&
+            _names.length        == len &&
+            _degrees.length      == len &&
+            _fields.length       == len &&
+            _universities.length == len &&
+            _years.length        == len &&
+            _certHashes.length   == len &&
+            _certIds.length      == len,
             "Array length mismatch"
         );
-        for (uint256 i = 0; i < _students.length; i++) {
-            if (hashToIndex[_certHashes[i]] != 0) continue;
-            if (enrolToIndex[_enrolments[i]] != 0) continue;
-            if (_students[i] == address(0)) continue;
 
-            _storeCert(
-                _students[i], _enrolments[i], _names[i],
-                _degrees[i], _fields[i], _universities[i],
-                _years[i], _certHashes[i], _certIds[i]
-            );
+        for (uint256 i = 0; i < len; i++) {
+            // Only skip genuine duplicates
+            if (bytes(_certHashes[i]).length == 0)    continue;
+            if (hashToIndex[_certHashes[i]]  != 0)   continue;
+            if (enrolToIndex[_enrolments[i]] != 0)   continue;
+
+            // Use admin wallet when no student wallet provided
+            address student = (_students[i] == address(0)) ? msg.sender : _students[i];
+
+            _store(student, _enrolments[i], _names[i], _degrees[i],
+                   _fields[i], _universities[i], _years[i], _certHashes[i], _certIds[i]);
         }
     }
 
-    function _storeCert(
+    function _store(
         address _student,
-        string memory _enrolmentNumber,
-        string memory _studentName,
+        string memory _enrolment,
+        string memory _name,
         string memory _degree,
-        string memory _fieldOfStudy,
+        string memory _field,
         string memory _university,
         uint256 _year,
         string memory _certHash,
         string memory _certId
     ) internal {
-        Certificate memory cert = Certificate({
-            issuer:          msg.sender,
-            student:         _student,
-            enrolmentNumber: _enrolmentNumber,
-            studentName:     _studentName,
-            degree:          _degree,
-            fieldOfStudy:    _fieldOfStudy,
-            university:      _university,
-            year:            _year,
-            certHash:        _certHash,
-            certId:          _certId,
-            timestamp:       block.timestamp,
-            isValid:         true
-        });
+        allCerts.push(Certificate({
+            issuer          : msg.sender,
+            student         : _student,
+            enrolmentNumber : _enrolment,
+            studentName     : _name,
+            degree          : _degree,
+            fieldOfStudy    : _field,
+            university      : _university,
+            year            : _year,
+            certHash        : _certHash,
+            certId          : _certId,
+            timestamp       : block.timestamp,
+            isValid         : true
+        }));
 
-        allCerts.push(cert);
-        uint256 index = allCerts.length;            
-        studentCertIndexes[_student].push(index - 1);
-        hashToIndex[_certHash]          = index;
-        enrolToIndex[_enrolmentNumber]  = index;
+        uint256 slot = allCerts.length;      // slot+1 (0 = absent)
+        hashToIndex[_certHash]   = slot;
+        enrolToIndex[_enrolment] = slot;
+        studentIndexes[_student].push(slot - 1);
         totalCertificates++;
 
-        emit CertificateIssued(
-            msg.sender, _student, _enrolmentNumber, _studentName,
-            _degree, _university, _year, _certHash, _certId, block.timestamp
-        );
+        emit CertificateIssued(_certHash, _enrolment, _name);
     }
 
-    // ── Verify by hash ────────────────────────────────────────
+    // ── Verify by stored hash (PRIMARY — most reliable) ──────
     function verifyCertificate(string memory _certHash)
         external view returns (bool)
     {
-        uint256 idx = hashToIndex[_certHash];
-        if (idx == 0) return false;
-        return allCerts[idx - 1].isValid;
+        uint256 slot = hashToIndex[_certHash];
+        if (slot == 0) return false;
+        return allCerts[slot - 1].isValid;
     }
 
-    // ── FIXED: Compare hashes using keccak256 encoding ────────
-    function verifyCertificateHash(string memory _enrolment, string memory _hashToCheck)
+    // ── Verify by enrolment + hash ────────────────────────────
+    function verifyCertificateHash(string memory _enrolment, string memory _hash)
         external view returns (bool authentic, bool exists)
     {
-        uint256 idx = enrolToIndex[_enrolment];
-        if (idx == 0) return (false, false);
-        Certificate memory cert = allCerts[idx - 1];
+        uint256 slot = enrolToIndex[_enrolment];
+        if (slot == 0) return (false, false);
+        Certificate storage cert = allCerts[slot - 1];
         
-        // Since both cert.certHash and _hashToCheck are passed as strings like "0xabc...", 
-        // we can directly compare their string values via keccak256
-        bool isMatch = keccak256(abi.encodePacked(cert.certHash)) == keccak256(abi.encodePacked(_hashToCheck));
-        
+        // FIXED: Renamed reserved keyword 'match' to 'isMatch'
+        bool isMatch = keccak256(bytes(cert.certHash)) == keccak256(bytes(_hash));
         return (isMatch && cert.isValid, true);
     }
 
-    // ── Lookup by enrolment (Student Panel) ──────────────────
+    // ── Get full cert by enrolment ────────────────────────────
     function getCertificateByEnrolment(string memory _enrolment)
         external view returns (Certificate memory)
     {
-        uint256 idx = enrolToIndex[_enrolment];
-        require(idx != 0, "Certificate not found");
-        return allCerts[idx - 1];
+        uint256 slot = enrolToIndex[_enrolment];
+        require(slot != 0, "Not found");
+        return allCerts[slot - 1];
     }
-
+    
+    // ── Get certs by Student Wallet ───────────────────────────
     function getCertificatesByStudent(address _student)
         external view returns (Certificate[] memory)
     {
-        uint256[] memory indexes = studentCertIndexes[_student];
+        uint256[] memory indexes = studentIndexes[_student];
         Certificate[] memory result = new Certificate[](indexes.length);
         for (uint256 i = 0; i < indexes.length; i++) {
             result[i] = allCerts[indexes[i]];
@@ -224,29 +167,14 @@ contract DegreeCertificate {
         return result;
     }
 
-    function getCertificateByHash(string memory _certHash)
-        external view returns (Certificate memory){
-        uint256 idx = hashToIndex[_certHash];
-        require(idx != 0, "Certificate not found");
-        return allCerts[idx - 1];
-    }
-
+    // ── Get all certs (public registry) ──────────────────────
     function getAllCertificates()
         external view returns (Certificate[] memory)
     {
         return allCerts;
     }
 
-    function getAllCertificatesPaginated(uint256 _from, uint256 _count)
-        external view returns (Certificate[] memory)
-    {
-        require(_from < allCerts.length, "Out of range");
-        uint256 end = _from + _count;
-        if (end > allCerts.length) end = allCerts.length;
-        Certificate[] memory result = new Certificate[](end - _from);
-        for (uint256 i = _from; i < end; i++) {
-            result[i - _from] = allCerts[i];
-        }
-        return result;
+    function totalCertificatesCount() external view returns (uint256) {
+        return totalCertificates;
     }
 }
