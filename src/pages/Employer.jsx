@@ -48,36 +48,39 @@ export default function Employer({ wallet, contract, certificates, setCertificat
     await new Promise(r => setTimeout(r, 700));
 
     if (contract) {
-      // ── Step 1: v2 path — re-derive deterministic hash and compare ──────────
       try {
+        // Step 1: Re-derive the hash using the exact same utility function
         const recomputedHash = generateCertHash({
           enrolmentNumber: cert.enrolmentNumber,
           studentName    : cert.studentName,
           degree         : cert.degree,
-          fieldOfStudy   : cert.field,
+          fieldOfStudy   : cert.field, // Ensure this matches what was saved
           university     : cert.university,
           year           : cert.year,
         });
 
+        console.log("Verifying Enrolment:", cert.enrolmentNumber);
+        console.log("Recomputed Hash:", recomputedHash);
+        console.log("Original Hash (id):", cert.id);
+
+        // Step 2: Call the fixed contract function
         const [authentic, exists] = await contract.verifyCertificateHash(
           cert.enrolmentNumber,
           recomputedHash
         );
 
+        console.log("Contract returned:", { authentic, exists });
+
         if (exists) {
-          // v2 contract answered definitively
           setAuthResult({ authentic, exists, method: "v2-hash" });
           setChecking(false);
           return;
         }
-        // exists=false means enrolment not found via v2 mapping → fall through
-      } catch {
-        // verifyCertificateHash doesn't exist (v1 contract) → fall through
+      } catch (error) {
+         console.error("Verification failed:", error);
       }
 
-      // ── Step 2: v1/v2 fallback — verify by the stored cert.id directly ──────
-      //    This works when the cert was issued before v2, because the old hash
-      //    stored on-chain IS cert.id (even if it was non-deterministic).
+      // Step 3: Fallback (if the mapping lookup failed for some reason)
       try {
         const ok = await contract.verifyCertificate(cert.id);
         if (ok) {
@@ -87,10 +90,9 @@ export default function Employer({ wallet, contract, certificates, setCertificat
         }
       } catch { /* ignore */ }
 
-      // ── Step 3: nothing matched on-chain ─────────────────────────────────────
       setAuthResult({ authentic: false, exists: false, method: "not-found" });
     } else {
-      // No contract — simulate: re-derive hash and compare with stored cert.id
+      // Offline fallback
       const recomputedHash = generateCertHash({
         enrolmentNumber: cert.enrolmentNumber,
         studentName    : cert.studentName,
