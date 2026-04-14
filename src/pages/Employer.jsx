@@ -8,7 +8,6 @@ export default function Employer({ wallet, contract, certificates, setCertificat
   const [authResult, setAuthResult] = useState(null);
   const [loading, setLoading]       = useState(false);
 
-  // Auto-load from chain on first mount if we have a contract but no certs yet
   useEffect(() => {
     if (contract && certificates.length === 0) loadFromChain();
   }, [contract]);
@@ -31,69 +30,22 @@ export default function Employer({ wallet, contract, certificates, setCertificat
         issuedDate     : new Date(Number(c.timestamp) * 1000).toLocaleDateString("en-IN", { day:"2-digit", month:"long", year:"numeric" }),
         verified       : c.isValid,
       }));
-      // ✅ merge avoids duplicating certs already in localStorage
       mergeCertificates(parsed);
     } catch (err) { console.error("Could not fetch from chain:", err); }
     setLoading(false);
   }
 
-  // ── Robust 3-step verification ─────────────────────────────────────────────
-  // Step 1: try verifyCertificateHash (v2 contract) with re-derived hash
-  // Step 2: try verifyCertificate with cert.id directly (works if cert was
-  //         issued with old v1 contract where hash = cert.id stored on chain)
-  // Step 3: fallback to local state match
+  // ══════════════════════════════════════════════════════════
+  // VERIFICATION — 3 steps, most reliable first
+  // ══════════════════════════════════════════════════════════
   async function handleVerifyOnChain(cert) {
     setChecking(true);
     setAuthResult(null);
-    await new Promise(r => setTimeout(r, 700));
+    await new Promise(r => setTimeout(r, 600));
 
-    if (contract) {
-      try {
-        // Step 1: Re-derive the hash using the exact same utility function
-        const recomputedHash = generateCertHash({
-          enrolmentNumber: cert.enrolmentNumber,
-          studentName    : cert.studentName,
-          degree         : cert.degree,
-          fieldOfStudy   : cert.field, // Ensure this matches what was saved
-          university     : cert.university,
-          year           : cert.year,
-        });
-
-        console.log("Verifying Enrolment:", cert.enrolmentNumber);
-        console.log("Recomputed Hash:", recomputedHash);
-        console.log("Original Hash (id):", cert.id);
-
-        // Step 2: Call the fixed contract function
-        const [authentic, exists] = await contract.verifyCertificateHash(
-          cert.enrolmentNumber,
-          recomputedHash
-        );
-
-        console.log("Contract returned:", { authentic, exists });
-
-        if (exists) {
-          setAuthResult({ authentic, exists, method: "v2-hash" });
-          setChecking(false);
-          return;
-        }
-      } catch (error) {
-         console.error("Verification failed:", error);
-      }
-
-      // Step 3: Fallback (if the mapping lookup failed for some reason)
-      try {
-        const ok = await contract.verifyCertificate(cert.id);
-        if (ok) {
-          setAuthResult({ authentic: true, exists: true, method: "direct-hash" });
-          setChecking(false);
-          return;
-        }
-      } catch { /* ignore */ }
-
-      setAuthResult({ authentic: false, exists: false, method: "not-found" });
-    } else {
-      // Offline fallback
-      const recomputedHash = generateCertHash({
+    if (!contract) {
+      // Offline: re-derive hash and compare with stored cert.id
+      const recomputed = generateCertHash({
         enrolmentNumber: cert.enrolmentNumber,
         studentName    : cert.studentName,
         degree         : cert.degree,
@@ -101,9 +53,81 @@ export default function Employer({ wallet, contract, certificates, setCertificat
         university     : cert.university,
         year           : cert.year,
       });
-      const match = recomputedHash === cert.id;
-      setAuthResult({ authentic: match, exists: true, method: "simulated" });
+      console.log("[Employer offline] recomputed:", recomputed, "stored:", cert.id);
+      setAuthResult({ authentic: recomputed === cert.id, exists: true, method:"offline" });
+      setChecking(false);
+      return;
     }
+
+    // ── STEP 1 (PRIMARY): verifyCertificate(storedHash) ──────────────────────
+    // cert.id IS the hash that was passed to batchIssueCertificates.
+    // The contract stores it in hashToIndex. This lookup cannot fail if the
+    // cert was actually written to chain.
+    try {
+      console.log("[Employer] Step1: verifyCertificate with stored hash:", cert.id);
+      const ok = await contract.verifyCertificate(cert.id);
+      console.log("[Employer] Step1 result:", ok);
+      if (ok) {
+        setAuthResult({ authentic: true, exists: true, method:"stored-hash" });
+        setChecking(false);
+        return;
+      }
+      // ok=false means isValid=false (revoked) OR hash not in mapping
+      // Try re-deriving the hash to check if there's a mismatch
+    } catch (err) {
+      console.error("[Employer] Step1 error:", err);
+    }
+
+    // ── STEP 2: Re-derive hash and try verifyCertificate ─────────────────────
+    // If the cert was loaded from chain via getAllCertificates, cert.id already
+    // IS the certHash. But if it came from localStorage it might be stale.
+    // Re-derive and try.
+    try {
+      const recomputed = generateCertHash({
+        enrolmentNumber: cert.enrolmentNumber,
+        studentName    : cert.studentName,
+        degree         : cert.degree,
+        fieldOfStudy   : cert.field,
+        university     : cert.university,
+        year           : cert.year,
+      });
+      console.log("[Employer] Step2: recomputed hash:", recomputed);
+      console.log("[Employer] Step2: stored cert.id:", cert.id);
+
+      if (recomputed !== cert.id) {
+        // Hashes differ — localStorage is stale, try the recomputed one
+        const ok2 = await contract.verifyCertificate(recomputed);
+        console.log("[Employer] Step2 verifyCertificate(recomputed):", ok2);
+        if (ok2) {
+          setAuthResult({ authentic: true, exists: true, method:"recomputed-hash" });
+          setChecking(false);
+          return;
+        }
+      }
+
+      // ── STEP 3: verifyCertificateHash (enrolment mapping) ──────────────────
+      if (cert.enrolmentNumber) {
+        try {
+          const [authentic, exists] = await contract.verifyCertificateHash(
+            cert.enrolmentNumber,
+            recomputed
+          );
+          console.log("[Employer] Step3 verifyCertificateHash:", { authentic, exists });
+          if (exists) {
+            setAuthResult({ authentic, exists, method:"enrol-hash" });
+            setChecking(false);
+            return;
+          }
+        } catch (err) {
+          console.error("[Employer] Step3 error:", err);
+        }
+      }
+    } catch (err) {
+      console.error("[Employer] Step2 error:", err);
+    }
+
+    // Nothing worked → not on chain
+    setAuthResult({ authentic: false, exists: false, method:"not-found" });
     setChecking(false);
   }
 
@@ -117,7 +141,7 @@ export default function Employer({ wallet, contract, certificates, setCertificat
       c.enrolmentNumber?.toLowerCase().includes(q);
   });
 
-  // ── Detail modal ──────────────────────────────────────────────────────────
+  // ── Detail Modal ──────────────────────────────────────────
   function CertDetailModal({ cert, onClose }) {
     return (
       <div style={{
@@ -126,20 +150,18 @@ export default function Employer({ wallet, contract, certificates, setCertificat
         padding:"2rem", backdropFilter:"blur(2px)"
       }} onClick={onClose}>
         <div style={{
-          background:"var(--ivory)", maxWidth:620, width:"100%",
+          background:"var(--ivory)", maxWidth:640, width:"100%",
           maxHeight:"90vh", overflowY:"auto",
           border:"1px solid var(--rule)", boxShadow:"0 8px 48px rgba(15,31,61,0.3)",
         }} onClick={e => e.stopPropagation()}>
 
           <div style={{ background:"var(--navy)", padding:"1.5rem 2rem", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-            <div style={{ fontFamily:"var(--f-display)", fontSize:"1rem", color:"var(--ivory)", fontWeight:600 }}>
-              Certificate Details
-            </div>
+            <div style={{ fontFamily:"var(--f-display)", fontSize:"1rem", color:"var(--ivory)", fontWeight:600 }}>Certificate Details</div>
             <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--gold)", fontSize:"1.2rem", cursor:"pointer" }}>✕</button>
           </div>
 
           <div style={{ padding:"2rem" }}>
-            {/* Mini cert card */}
+            {/* Mini cert */}
             <div style={{
               background:"white", border:"1px solid var(--rule)", padding:"1.5rem",
               textAlign:"center", position:"relative", overflow:"hidden",
@@ -151,10 +173,10 @@ export default function Employer({ wallet, contract, certificates, setCertificat
               <div style={{ fontFamily:"var(--f-display)", fontSize:"0.8rem", fontStyle:"italic", color:"var(--gold)", margin:"0.3rem 0" }}>{cert.degree}</div>
               <div style={{ fontSize:"0.65rem", color:"var(--ink-mid)" }}>in {cert.field} · {cert.year}</div>
               <div style={{ width:"60%", height:1, background:"linear-gradient(90deg,transparent,var(--gold),transparent)", margin:"0.75rem auto" }} />
-              <div style={{ fontFamily:"var(--f-mono)", fontSize:"0.6rem", color:"var(--indigo)" }}>{cert.certId || cert.id?.slice(0,24) + "…"}</div>
+              <div style={{ fontFamily:"var(--f-mono)", fontSize:"0.6rem", color:"var(--indigo)" }}>{cert.certId || cert.id?.slice(0,24)+"…"}</div>
             </div>
 
-            {/* Detail grid */}
+            {/* Fields */}
             <div className="result-grid" style={{ marginBottom:"1.5rem" }}>
               {[
                 ["Enrolment Number",   cert.enrolmentNumber || "—"],
@@ -183,18 +205,18 @@ export default function Employer({ wallet, contract, certificates, setCertificat
               <div className="hash-display">{cert.issuer || "—"}</div>
             </div>
 
-            {/* Auth result banner */}
+            {/* Auth result */}
             {authResult && (
               <div className={authResult.authentic ? "success-banner" : "error-banner"} style={{ marginBottom:"1rem", fontSize:"0.88rem" }}>
                 {authResult.authentic
                   ? "✅ Authentic Certificate — verified on the Ethereum blockchain."
                   : authResult.exists
-                    ? "⚠️ Tampered Certificate — hash mismatch detected on blockchain!"
-                    : "❌ Not Found — this certificate does not exist on the blockchain."
+                    ? "⚠️ Tampered — hash mismatch detected on blockchain!"
+                    : "❌ Not Found — certificate not on blockchain. Re-issue from Admin Panel."
                 }
-                {authResult.method === "direct-hash" && authResult.authentic && (
-                  <div style={{ fontSize:"0.75rem", marginTop:"0.3rem", opacity:0.7 }}>
-                    (verified via stored certificate hash)
+                {authResult.method && (
+                  <div style={{ fontSize:"0.72rem", marginTop:"0.3rem", opacity:0.65 }}>
+                    Verification method: {authResult.method}
                   </div>
                 )}
               </div>
@@ -217,7 +239,6 @@ export default function Employer({ wallet, contract, certificates, setCertificat
     );
   }
 
-  // ── Main render ───────────────────────────────────────────────────────────
   return (
     <div>
       <div className="page-masthead">
@@ -225,14 +246,11 @@ export default function Employer({ wallet, contract, certificates, setCertificat
         <h1 className="masthead-title">Employer <em>Panel</em></h1>
         <div className="masthead-rule" />
         <p className="masthead-sub">
-          Search and verify any academic credential. Click a record to see the full
-          certificate and run a blockchain authenticity check.
+          Search and verify any academic credential. Click a record to run a blockchain authenticity check.
         </p>
       </div>
 
       <div className="registry-body">
-
-        {/* Controls */}
         <div className="registry-controls">
           <input
             className="registry-search"
@@ -261,7 +279,6 @@ export default function Employer({ wallet, contract, certificates, setCertificat
           </div>
         </div>
 
-        {/* Summary cards */}
         {certificates.length > 0 && (
           <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"1rem", marginBottom:"1.5rem" }}>
             {[
@@ -269,11 +286,7 @@ export default function Employer({ wallet, contract, certificates, setCertificat
               ["Institutions",       [...new Set(certificates.map(c=>c.university))].length, "var(--indigo)"],
               ["Years Covered",      [...new Set(certificates.map(c=>c.year))].sort().join(", ") || "—", "var(--gold)"],
             ].map(([label, val, color]) => (
-              <div key={label} style={{
-                background:"white", border:"1px solid var(--rule)",
-                borderTop:"3px solid "+color, padding:"1.2rem 1.5rem",
-                boxShadow:"0 1px 6px var(--shadow)"
-              }}>
+              <div key={label} style={{ background:"white", border:"1px solid var(--rule)", borderTop:"3px solid "+color, padding:"1.2rem 1.5rem", boxShadow:"0 1px 6px var(--shadow)" }}>
                 <div style={{ fontSize:"0.6rem", letterSpacing:"2px", textTransform:"uppercase", color:"var(--ink-light)", fontFamily:"var(--f-label)", fontWeight:700, marginBottom:"0.4rem" }}>{label}</div>
                 <div style={{ fontFamily:"var(--f-display)", fontSize:typeof val === "number" ? "2rem":"0.85rem", fontWeight:700, color }}>{val}</div>
               </div>
@@ -281,7 +294,6 @@ export default function Employer({ wallet, contract, certificates, setCertificat
           </div>
         )}
 
-        {/* Ledger table */}
         <div className="ledger-table-wrap">
           <div className="ledger-header-row" style={{ gridTemplateColumns:"40px 120px 1fr 1.2fr 80px 90px 80px" }}>
             {["#","Enrolment","Student","Degree","Year","Status","Action"].map(h => (
@@ -299,10 +311,7 @@ export default function Employer({ wallet, contract, certificates, setCertificat
             <div className="ledger-empty">
               <div className="ledger-empty-icon">📭</div>
               <div className="ledger-empty-text">
-                {certificates.length === 0
-                  ? "No certificates yet. Issue some from the Admin Panel."
-                  : "No certificates match your search."
-                }
+                {certificates.length === 0 ? "No certificates yet. Issue from Admin Panel." : "No certificates match your search."}
               </div>
             </div>
           )}
@@ -339,14 +348,9 @@ export default function Employer({ wallet, contract, certificates, setCertificat
           ))}
         </div>
 
-        <div style={{
-          marginTop:"1.5rem", padding:"1rem 1.5rem",
-          background:"white", border:"1px solid var(--rule)",
-          display:"flex", alignItems:"center", gap:"1rem",
-          fontFamily:"var(--f-mono)", fontSize:"0.72rem", color:"var(--ink-light)"
-        }}>
+        <div style={{ marginTop:"1.5rem", padding:"1rem 1.5rem", background:"white", border:"1px solid var(--rule)", display:"flex", alignItems:"center", gap:"1rem", fontFamily:"var(--f-mono)", fontSize:"0.72rem", color:"var(--ink-light)" }}>
           <span style={{ fontSize:"1rem" }}>⛓</span>
-          <span>Click any row → open certificate details → click <strong style={{ color:"var(--indigo)" }}>Verify Authenticity</strong> to check against the blockchain. Data persists across page refreshes.</span>
+          <span>Click any row → <strong style={{ color:"var(--indigo)" }}>Verify Authenticity</strong> to check against blockchain. Data persists across refreshes.</span>
         </div>
       </div>
 

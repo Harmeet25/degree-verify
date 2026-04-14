@@ -3,7 +3,7 @@
 // paste your new contract address below.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const CONTRACT_ADDRESS = "0x9d83e140330758a8fFD07F8Bd73e86ebcA8a5692"; // ← replace after redeploy
+export const CONTRACT_ADDRESS = "0xD4Fc541236927E2EAf8F27606bD7309C1Fc2cbee"; // ← replace after redeploy
 
 export const CONTRACT_ABI = [
   // ── Write ──────────────────────────────────────────────────────────────────

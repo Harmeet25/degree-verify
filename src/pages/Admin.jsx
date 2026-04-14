@@ -9,8 +9,6 @@ const UNIS = [
   "Oxford University", "Cambridge University", "Harvard University", "Other"
 ];
 
-const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
-
 export default function Admin({ wallet, contract, certificates, setCertificates }) {
   const fileRef = useRef(null);
   const [university, setUniversity] = useState(UNIS[0]);
@@ -22,7 +20,6 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
   const [success, setSuccess]       = useState("");
   const [txHash, setTxHash]         = useState("");
 
-  // ── Excel parse ────────────────────────────────────────────────────────────
   function handleFile(e) {
     setError(""); setSuccess(""); setRows([]); setPreview(false);
     const file = e.target.files[0];
@@ -35,21 +32,20 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
         const data = XLSX.utils.sheet_to_json(ws, { defval:"" });
         if (!data.length) { setError("Excel file is empty."); return; }
 
-       const normalised = data.map((row, idx) => {
+        const normalised = data.map((row, idx) => {
           const r = {};
           Object.keys(row).forEach(k => {
             r[k.trim().toLowerCase().replace(/\s+/g,"_")] = String(row[k]).trim();
           });
           return {
-            enrolmentNumber: r["enrolment_number"] || r["enrollment_number"] || r["enrolment"] || r["roll_no"] || `ROW-${idx+1}`,
+            enrolmentNumber: r["enrolment_number"] || r["enrollment_number"] || r["enrolment"] || r["enrollment"] || r["roll_no"] || `ROW-${idx+1}`,
             studentName    : r["student_name"]     || r["name"]             || "",
             degree         : r["course"]            || r["degree"]          || "Bachelor of Science",
             fieldOfStudy   : r["field"]             || r["field_of_study"]  || r["branch"]  || "Computer Science",
-            year           : String(r["year"] || new Date().getFullYear()).replace(/\.0$/, ""), // Cleans up Excel number formats
+            year           : r["year"]              || new Date().getFullYear().toString(),
             grade          : r["grade"]             || r["cgpa"]            || "",
-            
-            // 🚨 BULLETPROOF FIX: Ignore Excel entirely, force Admin wallet
-            studentWallet  : wallet, 
+            // ✅ FIX: use wallet from Excel, fall back to admin wallet (NEVER zero address)
+            studentWallet  : r["wallet_address"]    || r["wallet"]          || wallet || "",
           };
         }).filter(r => r.studentName);
 
@@ -66,14 +62,12 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
     reader.readAsBinaryString(file);
   }
 
-  // ── Batch issue ────────────────────────────────────────────────────────────
   async function handleBatchIssue() {
     if (!wallet) { setError("Connect MetaMask first."); return; }
     if (!rows.length) { setError("No data loaded."); return; }
     setError(""); setSuccess(""); setLoading(true); setProgress(0);
 
     try {
-      // ✅ Deterministic hash — same fields, same order, no randomness
       const enriched = rows.map(r => {
         const certHash = generateCertHash({
           enrolmentNumber: r.enrolmentNumber,
@@ -83,7 +77,20 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
           university,
           year           : r.year,
         });
-        return { ...r, university, certHash, certId: generateCertId(r.studentName, r.enrolmentNumber, r.year) };
+        // ✅ CRITICAL: always a real address — use admin wallet as fallback
+        const studentAddr = (r.studentWallet && ethers.isAddress(r.studentWallet))
+          ? r.studentWallet
+          : wallet;   // admin's connected wallet — never address(0)
+
+        console.log(`[Admin] Row: ${r.enrolmentNumber} | Hash: ${certHash} | Student: ${studentAddr}`);
+
+        return {
+          ...r,
+          university,
+          certHash,
+          certId: generateCertId(r.studentName, r.enrolmentNumber, r.year),
+          studentAddr,
+        };
       });
 
       let issuedTxHash = null;
@@ -91,7 +98,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
       if (contract) {
         setProgress(20);
         const tx = await contract.batchIssueCertificates(
-          enriched.map(() => wallet), // 🚨 BULLETPROOF FIX: Always send the valid admin wallet
+          enriched.map(r => r.studentAddr),
           enriched.map(r => r.enrolmentNumber),
           enriched.map(r => r.studentName),
           enriched.map(r => r.degree),
@@ -106,6 +113,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
         setProgress(100);
         issuedTxHash = tx.hash;
         setTxHash(tx.hash);
+        console.log("[Admin] TX confirmed:", tx.hash);
       } else {
         for (let i = 0; i < enriched.length; i++) {
           await new Promise(r => setTimeout(r, 120));
@@ -126,14 +134,13 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
         year           : r.year,
         grade          : r.grade,
         issuer         : wallet,
-        studentWallet  : r.studentWallet,
+        studentWallet  : r.studentAddr,
         issuedDate     : new Date().toLocaleDateString("en-IN", { day:"2-digit", month:"long", year:"numeric" }),
         timestamp      : Date.now(),
         txHash         : issuedTxHash,
         verified       : true,
       }));
 
-      // ✅ setCertificates auto-persists to localStorage via usePersistentCerts
       setCertificates(prev => {
         const enrolSet = new Set(prev.map(c => c.enrolmentNumber));
         const fresh = newCerts.filter(c => !enrolSet.has(c.enrolmentNumber));
@@ -144,13 +151,12 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
       setRows([]); setPreview(false);
       if (fileRef.current) fileRef.current.value = "";
     } catch (err) {
-      console.error(err);
+      console.error("[Admin] Error:", err);
       setError(err.reason || err.message || "Transaction failed.");
     }
     setLoading(false);
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
       <div className="page-masthead">
@@ -170,8 +176,6 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
       )}
 
       <div style={{ padding:"2rem 4rem" }}>
-
-        {/* Upload card */}
         <div className="form-sheet" style={{ maxWidth:860 }}>
           <div className="form-sheet-header">
             <span>📂</span>
@@ -220,9 +224,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
               padding:"0.9rem 1.2rem", fontSize:"0.75rem", color:"var(--ink-mid)",
               lineHeight:1.7, marginBottom:"1rem"
             }}>
-              <strong style={{ color:"var(--navy)", fontFamily:"var(--f-label)", letterSpacing:"1px", fontSize:"0.65rem", textTransform:"uppercase" }}>
-                Expected Excel Format:
-              </strong><br/>
+              <strong style={{ color:"var(--navy)", fontFamily:"var(--f-label)", letterSpacing:"1px", fontSize:"0.65rem", textTransform:"uppercase" }}>Expected Excel Format:</strong><br/>
               <span style={{ fontFamily:"var(--f-mono)" }}>
                 | Enrolment Number | Student Name | Course | Year | Grade (opt) | Wallet Address (opt) |
               </span>
@@ -252,7 +254,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
           </div>
         </div>
 
-        {/* Preview table */}
+        {/* Preview */}
         {preview && rows.length > 0 && (
           <div style={{ marginTop:"2rem" }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"0.75rem" }}>
@@ -322,7 +324,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
 
         <div style={{ marginTop:"1.5rem", padding:"1rem 1.5rem", background:"white", border:"1px solid var(--rule)", display:"flex", alignItems:"center", gap:"1rem", fontFamily:"var(--f-mono)", fontSize:"0.72rem", color:"var(--ink-light)" }}>
           <span style={{ fontSize:"1rem" }}>⛓</span>
-          <span>All records stored immutably on <strong style={{ color:"var(--indigo)" }}>Ethereum Sepolia Testnet</strong> and cached in your browser for persistence.</span>
+          <span>All records stored on <strong style={{ color:"var(--indigo)" }}>Ethereum Sepolia Testnet</strong> and cached in browser.</span>
         </div>
       </div>
     </div>

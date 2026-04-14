@@ -1,13 +1,14 @@
 import { ethers } from "ethers";
 
 /**
- * Deterministic certificate hash.
- * Input order is fixed — must never change, as stored hashes depend on it.
- *
- * Fields used (all lowercased + trimmed for safety):
- *   enrolmentNumber | studentName | degree | fieldOfStudy | university | year
- *
- * Returns a 0x-prefixed keccak256 hex string (same as ethers v6 style).
+ * DETERMINISTIC certificate hash.
+ * 
+ * Fields: enrolmentNumber | studentName | degree | fieldOfStudy | university | year
+ * All trimmed + lowercased so casing differences don't break matching.
+ * 
+ * This EXACT function must be used in both Admin (issuance) and Employer (verification).
+ * The contract stores the output of this function as cert.certHash.
+ * verifyCertificate(hash) looks it up directly in hashToIndex — no enrolment mapping needed.
  */
 export function generateCertHash({ enrolmentNumber, studentName, degree, fieldOfStudy, university, year }) {
   const raw = [
@@ -23,7 +24,7 @@ export function generateCertHash({ enrolmentNumber, studentName, degree, fieldOf
 }
 
 /**
- * Human-readable Certificate ID (not used for hashing — display only).
+ * Human-readable Certificate ID (display only, not used for verification).
  */
 export function generateCertId(studentName, enrolmentNumber, year) {
   const initials = String(studentName)
