@@ -7,7 +7,7 @@
 //  5. npm run dev  (or push to Vercel)
 // ─────────────────────────────────────────────────────────
 
-export const CONTRACT_ADDRESS = "0x24d7A241F71239D093623D7615672C2b58Cf29B7"; // ← REPLACE with new address after redeploy
+export const CONTRACT_ADDRESS = "0x95981BD08ee418225A0870456D0c243efa824e2F"; // ← REPLACE with new address after redeploy
 
 export const CONTRACT_ABI = [
   {
