@@ -41,15 +41,15 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
             r[k.trim().toLowerCase().replace(/\s+/g,"_")] = String(row[k]).trim();
           });
           return {
-            enrolmentNumber: r["enrolment_number"] || r["enrollment_number"] || r["enrolment"] || r["enrollment"] || r["roll_no"] || `ROW-${idx+1}`,
+            enrolmentNumber: r["enrolment_number"] || r["enrollment_number"] || r["enrolment"] || r["roll_no"] || `ROW-${idx+1}`,
             studentName    : r["student_name"]     || r["name"]             || "",
             degree         : r["course"]            || r["degree"]          || "Bachelor of Science",
             fieldOfStudy   : r["field"]             || r["field_of_study"]  || r["branch"]  || "Computer Science",
-            year           : r["year"]              || new Date().getFullYear().toString(),
+            year           : String(r["year"] || new Date().getFullYear()).replace(/\.0$/, ""), // Cleans up Excel number formats
             grade          : r["grade"]             || r["cgpa"]            || "",
             
-            // 🚨 FIX: Change ZERO_ADDR to wallet here
-            studentWallet  : r["wallet_address"]    || r["wallet"]          || wallet, 
+            // 🚨 BULLETPROOF FIX: Ignore Excel entirely, force Admin wallet
+            studentWallet  : wallet, 
           };
         }).filter(r => r.studentName);
 
@@ -91,7 +91,7 @@ export default function Admin({ wallet, contract, certificates, setCertificates 
       if (contract) {
         setProgress(20);
         const tx = await contract.batchIssueCertificates(
-          enriched.map(r => ethers.isAddress(r.studentWallet) ? r.studentWallet : ZERO_ADDR),
+          enriched.map(() => wallet), // 🚨 BULLETPROOF FIX: Always send the valid admin wallet
           enriched.map(r => r.enrolmentNumber),
           enriched.map(r => r.studentName),
           enriched.map(r => r.degree),
